@@ -1,0 +1,7 @@
+Flask
+requests
+APScheduler
+python-levenshtein
+python-dateutil
+Flask-Login
+Flask-WTF

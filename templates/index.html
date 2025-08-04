@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Crime Analytics Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" /><link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" /><link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" /><link href="https://unpkg.com/slim-select@latest/dist/slimselect.css" rel="stylesheet" /><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="header"><div><h1>Thoothukudi District Police</h1><p>Live Crime Analytics Dashboard</p></div><a href="/logout" class="logout-button">Logout</a></header>
+    <div class="container">
+        <div class="filter-panel">
+            <h2>Filters</h2>
+            <div class="filter-section"><h4>Crime Type</h4><div id="crime-buttons-container" class="crime-buttons"><p>Loading...</p></div></div>
+            <div class="filter-section"><h4>Date Range</h4><div class="date-filters"><label for="fromDate">From:</label> <input type="date" id="fromDate"><label for="toDate">To:</label> <input type="date" id="toDate"></div></div>
+            <div class="filter-section"><h4>Area Type</h4><div class="area-filters"><label><input type="checkbox" class="area-filter" value="Town" checked> Town</label><label><input type="checkbox" class="area-filter" value="Rural" checked> Rural</label></div></div>
+            <div class="filter-section"><h4>Subdivision (Dropdown)</h4><select id="subdivision-select" multiple></select></div>
+            <div class="filter-section"><h4>Subdivision (List)</h4><div id="subdivision-list-container" class="subdivision-list"><p>Loading list...</p></div></div>
+            <div class="filter-section"><h4>Map View</h4><div class="view-filters"><label><input type="radio" name="mapView" value="point" checked> Point</label><label><input type="radio" name="mapView" value="cluster"> Cluster</label><label><input type="radio" name="mapView" value="heat"> Heat</label></div><div id="heatmap-options" class="heatmap-options" style="display: none;"><label for="heatmap-radius">Intensity: <span id="radius-value">25</span></label><input type="range" id="heatmap-radius" min="10" max="50" value="25"></div></div>
+            <button id="resetFilters">Reset All Filters</button>
+            <div class="analytics-panel filter-section"><h4>Analytics</h4><div id="analytics-container"><p>Loading...</p></div></div>
+        </div>
+        <div id="map"></div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script><script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDwDFzyRG2Mcubq2VY4Pk3tfT8GPFOUN-A"></script>
+    <script src="https://unpkg.com/leaflet.gridlayer.googlemutant@latest/dist/Leaflet.GoogleMutant.js"></script>
+    <script src="https://unpkg.com/slim-select@latest/dist/slimselect.min.js"></script><script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+
+
+    
