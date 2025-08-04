@@ -9,43 +9,40 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField
 from wtforms.validators import DataRequired
-from apscheduler.schedulers.background import BackgroundScheduler
 from collections import Counter
 import Levenshtein
 from dateutil.parser import parse as parse_date
 
 # --- CONFIGURATION & FLASK APP ---
-GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1oPytwBmdeQdvwJ0kKBfdbIjvgm61JhXQQWmPeTIUGsQ/export?format=csv&gid=1310813314'
+# Vercel requires the Flask app instance to be named 'app'
 app = Flask(__name__)
-# IMPORTANT: Change this secret key to a long, random string for production security
-app.config['SECRET_KEY'] = 'a-very-secret-and-random-string-for-production'
+
+# Read secrets from Environment Variables set in Vercel
+# Default values are provided for easy local development
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-dev-secret-key-change-me')
+GOOGLE_SHEET_URL = os.environ.get('GOOGLE_SHEET_URL')
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
+GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY')
 
 # --- LOGIN MANAGEMENT SETUP ---
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login'  # Redirect to login page if a user is not logged in
-
-# This is a simple in-memory user database. For a real application, use a proper database.
-# --- IMPORTANT: CHANGE THE DEFAULT PASSWORD ---
-users = {'admin': {'password': 'password123'}}
+login_manager.login_view = 'login'
+users = {ADMIN_USERNAME: {'password': ADMIN_PASSWORD}}
 
 class User(UserMixin):
-    def __init__(self, id):
-        self.id = id
-    def __repr__(self):
-        return f"User('{self.id}')"
-
+    def __init__(self, id): self.id = id
 @login_manager.user_loader
-def load_user(user_id):
-    return User(user_id) if user_id in users else None
-
+def load_user(user_id): return User(user_id) if user_id in users else None
 class LoginForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired()])
     submit = SubmitField('Sign In')
 
-# --- IN-MEMORY CACHE ---
+# --- IN-MEMORY CACHE (for "warm" serverless functions) ---
 crime_data_cache, filter_options_cache, analytics_data_cache = [], {}, {}
+data_loaded = False # Flag to check if data has been fetched in this instance
 
 # --- HIERARCHICAL MAPPING & GROUPING CONFIGURATION ---
 PS_TO_SUBDIVISION_MAP = {
@@ -75,13 +72,8 @@ def find_best_match_levenshtein(key, master_list):
     min_distance, best_match = float('inf'), None
     for master_item in master_list:
         distance = Levenshtein.distance(key, master_item.lower())
-        if distance < min_distance:
-            min_distance, best_match = distance, master_item
-    if best_match:
-        # Calculate a similarity score to decide if the match is good enough
-        score = (1 - (min_distance / max(len(key), len(best_match)))) * 100
-        if score >= 80:
-            return best_match
+        if distance < min_distance: min_distance, best_match = distance, master_item
+    if best_match and (1 - (min_distance / max(len(key), len(best_match)))) * 100 >= 80: return best_match
     return None
 
 def standardize_police_station(messy_station):
@@ -114,7 +106,8 @@ def standardize_date(date_string):
 
 # --- MAIN DATA PROCESSING FUNCTION ---
 def fetch_and_process_data():
-    global crime_data_cache, filter_options_cache, analytics_data_cache
+    global crime_data_cache, filter_options_cache, analytics_data_cache, data_loaded
+    if not GOOGLE_SHEET_URL: print("ERROR: GOOGLE_SHEET_URL environment variable is not set."); return
     print("Attempting to refresh data from Google Sheet...")
     try:
         response = requests.get(GOOGLE_SHEET_URL); response.raise_for_status()
@@ -134,14 +127,19 @@ def fetch_and_process_data():
             final_event_types.add(cleaned_event_type); final_subdivisions.add(subdivision)
         
         crime_data_cache = processed_data
-        print(f"Data refreshed successfully. Loaded {len(crime_data_cache)} records.")
         filter_options_cache = { "event_types": sorted(list(final_event_types)), "subdivisions": sorted(list(final_subdivisions)) }
         station_counts = Counter(item['Police Station'] for item in processed_data)
         analytics_data_cache = { "total_cases": len(processed_data), "top_stations": station_counts.most_common(5) } if processed_data else {"total_cases": 0, "top_stations": []}
+        data_loaded = True
+        print(f"Data refreshed successfully. Loaded {len(crime_data_cache)} records.")
     except Exception as e:
         print(f"An error occurred during data processing: {e}")
 
-# --- FLASK ROUTES (Login, Logout, and Protected Routes) ---
+def ensure_data_loaded():
+    global data_loaded
+    if not data_loaded: fetch_and_process_data()
+
+# --- FLASK ROUTES ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated: return redirect(url_for('dashboard'))
@@ -161,22 +159,22 @@ def logout():
 @app.route('/')
 @login_required
 def dashboard():
-    return render_template('index.html')
+    return render_template('index.html', GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY)
 
 @app.route('/api/data')
 @login_required
-def get_crime_data(): return jsonify(crime_data_cache)
+def get_crime_data(): ensure_data_loaded(); return jsonify(crime_data_cache)
 
 @app.route('/api/filters')
 @login_required
-def get_filter_options(): return jsonify(filter_options_cache)
+def get_filter_options(): ensure_data_loaded(); return jsonify(filter_options_cache)
 
 @app.route('/api/analytics')
 @login_required
-def get_analytics_data(): return jsonify(analytics_data_cache)
+def get_analytics_data(): ensure_data_loaded(); return jsonify(analytics_data_cache)
 
-# --- SCHEDULER & MAIN EXECUTION ---
-scheduler = BackgroundScheduler(); scheduler.add_job(func=fetch_and_process_data, trigger="interval", minutes=10); scheduler.start()
+# This block is useful for local testing (`python api/index.py`) but is ignored by Vercel
 if __name__ == '__main__':
+    # This will run the fetch function once on startup for local dev
     fetch_and_process_data()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(debug=True, port=5000)
