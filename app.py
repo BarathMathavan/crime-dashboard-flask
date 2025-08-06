@@ -9,42 +9,38 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField
 from wtforms.validators import DataRequired
+from apscheduler.schedulers.background import BackgroundScheduler
 from collections import Counter
 import Levenshtein
 from dateutil.parser import parse as parse_date
 
-# --- CONFIGURATION & FLASK APP ---
-# Vercel requires the Flask app instance to be named 'app'
+GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1oPytwBmdeQdvwJ0kKBfdbIjvgm61JhXQQWmPeTIUGsQ/export?format=csv&gid=1310813314'
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'a-very-secret-and-random-string-for-production'
 
-# Read secrets from Environment Variables set in Vercel
-# Default values are provided for easy local development
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-dev-secret-key-change-me')
-GOOGLE_SHEET_URL = os.environ.get('GOOGLE_SHEET_URL')
-ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
-GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY')
-
-# --- LOGIN MANAGEMENT SETUP ---
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login'
-users = {ADMIN_USERNAME: {'password': ADMIN_PASSWORD}}
+login_manager.login_view = 'login' 
+
+users = {'admin': {'password': 'password123'}}
 
 class User(UserMixin):
-    def __init__(self, id): self.id = id
+    def __init__(self, id):
+        self.id = id
+    def __repr__(self):
+        return f"User('{self.id}')"
+
 @login_manager.user_loader
-def load_user(user_id): return User(user_id) if user_id in users else None
+def load_user(user_id):
+    return User(user_id) if user_id in users else None
+
 class LoginForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired()])
     submit = SubmitField('Sign In')
 
-# --- IN-MEMORY CACHE (for "warm" serverless functions) ---
 crime_data_cache, filter_options_cache, analytics_data_cache = [], {}, {}
-data_loaded = False # Flag to check if data has been fetched in this instance
 
-# --- HIERARCHICAL MAPPING & GROUPING CONFIGURATION ---
 PS_TO_SUBDIVISION_MAP = {
     "AWPS Thoothukudi": "Thoothukudi Town", "Muthiahpuram": "Thoothukudi Town", "Thazhamuthunagar": "Thoothukudi Town", "Thermalnagar": "Thoothukudi Town", "Thoothukudi Central": "Thoothukudi Town", "Thoothukudi North": "Thoothukudi Town", "Thoothukudi South": "Thoothukudi Town",
     "AWPS Pudukotai Thoothukudi": "Thoothukudi Rural", "Murappanadu": "Thoothukudi Rural", "Pudukottai Thoothukudi": "Thoothukudi Rural", "Puthiamputhur": "Thoothukudi Rural", "SIPCOT Thoothukudi": "Thoothukudi Rural", "Thattparai": "Thoothukudi Rural",
@@ -59,7 +55,6 @@ MASTER_STATION_LIST = list(PS_TO_SUBDIVISION_MAP.keys())
 POLICE_STATION_MAP = { "tut/north": "Thoothukudi North", "tut/south": "Thoothukudi South", "west/kvp": "Kovilpatti West", "east/kvp": "Kovilpatti East", "taluk/tdr": "Tiruchendur Taluk", "temple/tdr": "Tiruchendur Temple", "awps/tut": "AWPS Thoothukudi", "awps/vkm": "AWPS Vilathikulam", "awps/tdr": "AWPS Tiruchendur", "awps/skm": "AWPS Sathankulam", "awps/kvp": "AWPS Kovilapatti", "awps/svm": "AWPS Srivaikundam", "awps/kadambur": "AWPS Kadambur", "sipcot": "SIPCOT Thoothukudi" }
 EVENT_TYPE_GROUPS = { "Fighting / Threatening": ["Fighting", "Fight", "Threatening", "Drunken Brawl"], "Family Dispute": ["Family Dispute", "Family Fighting"], "Road Accident": ["Road Accident"], "Fire Accident": ["Fire Accident", "Fire"], "Woman & Child Related": ["Woman and child Related", "Woman Related", "Child Related"], "Theft / Robbery": ["Theft", "Robbery"], "Civil Dispute": ["Civil Dispute", "Encroachment"], "Complaint Against Police": ["Complaint Against Police"], "Prohibition Related": ["Prohibition"], "Others": ["Others", "Disturbance", "Cheating", "Missing Person", "Cyber Crime", "Rescue Works"] }
 
-# --- DATA CLEANING & STANDARDIZATION FUNCTIONS ---
 def clean_event_type(messy_type):
     if not messy_type: return "Others"
     messy_type_lower = messy_type.lower()
@@ -72,8 +67,12 @@ def find_best_match_levenshtein(key, master_list):
     min_distance, best_match = float('inf'), None
     for master_item in master_list:
         distance = Levenshtein.distance(key, master_item.lower())
-        if distance < min_distance: min_distance, best_match = distance, master_item
-    if best_match and (1 - (min_distance / max(len(key), len(best_match)))) * 100 >= 80: return best_match
+        if distance < min_distance:
+            min_distance, best_match = distance, master_item
+    if best_match:
+        score = (1 - (min_distance / max(len(key), len(best_match)))) * 100
+        if score >= 80:
+            return best_match
     return None
 
 def standardize_police_station(messy_station):
@@ -104,10 +103,8 @@ def standardize_date(date_string):
     try: return parse_date(date_string, dayfirst=True).strftime('%Y-%m-%d')
     except (ValueError, TypeError): return None
 
-# --- MAIN DATA PROCESSING FUNCTION ---
 def fetch_and_process_data():
-    global crime_data_cache, filter_options_cache, analytics_data_cache, data_loaded
-    if not GOOGLE_SHEET_URL: print("ERROR: GOOGLE_SHEET_URL environment variable is not set."); return
+    global crime_data_cache, filter_options_cache, analytics_data_cache
     print("Attempting to refresh data from Google Sheet...")
     try:
         response = requests.get(GOOGLE_SHEET_URL); response.raise_for_status()
@@ -127,19 +124,13 @@ def fetch_and_process_data():
             final_event_types.add(cleaned_event_type); final_subdivisions.add(subdivision)
         
         crime_data_cache = processed_data
+        print(f"Data refreshed successfully. Loaded {len(crime_data_cache)} records.")
         filter_options_cache = { "event_types": sorted(list(final_event_types)), "subdivisions": sorted(list(final_subdivisions)) }
         station_counts = Counter(item['Police Station'] for item in processed_data)
         analytics_data_cache = { "total_cases": len(processed_data), "top_stations": station_counts.most_common(5) } if processed_data else {"total_cases": 0, "top_stations": []}
-        data_loaded = True
-        print(f"Data refreshed successfully. Loaded {len(crime_data_cache)} records.")
     except Exception as e:
         print(f"An error occurred during data processing: {e}")
 
-def ensure_data_loaded():
-    global data_loaded
-    if not data_loaded: fetch_and_process_data()
-
-# --- FLASK ROUTES ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated: return redirect(url_for('dashboard'))
@@ -159,22 +150,22 @@ def logout():
 @app.route('/')
 @login_required
 def dashboard():
-    return render_template('index.html', GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY)
+    return render_template('index.html')
 
 @app.route('/api/data')
 @login_required
-def get_crime_data(): ensure_data_loaded(); return jsonify(crime_data_cache)
+def get_crime_data(): return jsonify(crime_data_cache)
 
 @app.route('/api/filters')
 @login_required
-def get_filter_options(): ensure_data_loaded(); return jsonify(filter_options_cache)
+def get_filter_options(): return jsonify(filter_options_cache)
 
 @app.route('/api/analytics')
 @login_required
-def get_analytics_data(): ensure_data_loaded(); return jsonify(analytics_data_cache)
+def get_analytics_data(): return jsonify(analytics_data_cache)
 
-# This block is useful for local testing (`python api/index.py`) but is ignored by Vercel
+# --- SCHEDULER & MAIN EXECUTION ---
+scheduler = BackgroundScheduler(); scheduler.add_job(func=fetch_and_process_data, trigger="interval", minutes=10); scheduler.start()
 if __name__ == '__main__':
-    # This will run the fetch function once on startup for local dev
     fetch_and_process_data()
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=True)

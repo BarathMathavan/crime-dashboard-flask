@@ -1,7 +1,10 @@
 Flask
-requests
-APScheduler
-python-levenshtein
-python-dateutil
 Flask-Login
 Flask-WTF
+requests
+python-levenshtein
+python-dateutil
+vercel-kv
+numpy
+matplotlib
+scikit-learn
